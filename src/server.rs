@@ -87,6 +87,7 @@ impl Server {
         let mut err_buf = String::new();
 
         loop {
+            input_buf.clear();
             stream.read_until(b'\n', &mut input_buf).await?;
 
             if input_buf.is_empty() {
