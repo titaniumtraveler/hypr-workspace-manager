@@ -3,7 +3,7 @@ use crate::{
     path_builder::PathBuilder,
     server::signature::{Signature, Type},
 };
-use anyhow::{Error, Result};
+use anyhow::{anyhow, Result};
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
     env::VarError,
@@ -38,14 +38,14 @@ impl Server {
         let instance = match std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {
             Ok(instance) => instance,
             Err(VarError::NotPresent) => {
-                return Err(Error::msg(
+                return Err(anyhow!(
                     "expected to be started in the context of a running hyprland instance",
                 ));
             }
             Err(VarError::NotUnicode(var)) => {
-                return Err(Error::msg(format!(
+                return Err(anyhow!(
                     "invalid hyprland instance signature {var:?}, expected it to be unicode"
-                )));
+                ));
             }
         };
 
@@ -121,8 +121,7 @@ impl Server {
         reply: &mut String,
     ) -> Result<()> {
         let input = from_utf8(input)?;
-        let (cmd, input) =
-            Signature::parse_cmd(input).ok_or_else(|| Error::msg("expected param"))?;
+        let (cmd, input) = Signature::parse_cmd(input).ok_or_else(|| anyhow!("expected param"))?;
         match cmd {
             "create" => {
                 const CREATE: Signature = Signature {
@@ -137,7 +136,7 @@ impl Server {
                 let mut lock = self.inner.write().await;
                 match lock.workspaces.entry(name.into()) {
                     Entry::Vacant(vacant) => vacant.insert(WorkspaceSettings::default()),
-                    Entry::Occupied(_) => return Err(Error::msg("name already in use")),
+                    Entry::Occupied(_) => return Err(anyhow!("name already in use")),
                 };
             }
             "bind" => {
@@ -185,9 +184,7 @@ impl Server {
 
                 let lock = self.inner.read().await;
                 let name = lock.registers.get(&register).ok_or_else(|| {
-                    Error::msg(format!(
-                        "register {register} does not point to any workspace"
-                    ))
+                    anyhow!("register {register} does not point to any workspace")
                 })?;
 
                 hypr.go_to(name);
@@ -204,9 +201,7 @@ impl Server {
 
                 let lock = self.inner.read().await;
                 let name = lock.registers.get(&register).ok_or_else(|| {
-                    Error::msg(format!(
-                        "register {register} does not point to any workspace"
-                    ))
+                    anyhow!("register {register} does not point to any workspace")
                 })?;
 
                 hypr.move_to(name);
@@ -249,11 +244,7 @@ impl Server {
                 reply.clear();
                 stream.flush().await?;
             }
-            inv_cmd => {
-                return Err(Error::msg(format!(
-                    "expected valid command, got `{inv_cmd}`"
-                )))
-            }
+            inv_cmd => return Err(anyhow!("expected valid command, got `{inv_cmd}`")),
         }
 
         Ok(())
