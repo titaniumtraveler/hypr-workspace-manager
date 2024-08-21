@@ -98,10 +98,9 @@ impl Server {
                 .handle_message(&mut stream, &mut hypr, &input_buf, &mut reply_buf)
                 .await
             {
-                err_buf.write_fmt(format_args!("{}", err))?;
-                let res = stream.write_all(err_buf.as_bytes()).await;
                 err_buf.clear();
-                res?;
+                err_buf.write_fmt(format_args!("{}", err))?;
+                stream.write_all(err_buf.as_bytes()).await?;
                 stream.flush().await?;
             }
         }
