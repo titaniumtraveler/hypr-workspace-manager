@@ -235,7 +235,11 @@ impl Server {
                 reply.clear();
                 stream.flush().await?;
             }
-            _ => return Err(Error::msg("invalid command")),
+            inv_cmd => {
+                return Err(Error::msg(format!(
+                    "expected valid command, got `{inv_cmd}`"
+                )))
+            }
         }
 
         Ok(())
