@@ -60,7 +60,7 @@ impl Display for Signature {
             }
         }
 
-        todo!()
+        Ok(())
     }
 }
 
