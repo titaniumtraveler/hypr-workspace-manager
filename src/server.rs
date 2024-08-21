@@ -183,7 +183,14 @@ impl Server {
                 let register: u8 = parser.parse_param()?;
                 parser.finish()?;
 
-                hypr.go_to(register);
+                let lock = self.inner.read().await;
+                let name = lock.registers.get(&register).ok_or_else(|| {
+                    Error::msg(format!(
+                        "register {register} does not point to any workspace"
+                    ))
+                })?;
+
+                hypr.go_to(name);
             }
             "move_to" => {
                 const MOVE_TO: Signature = Signature {
@@ -195,7 +202,14 @@ impl Server {
                 let register: u8 = parser.parse_param()?;
                 parser.finish()?;
 
-                hypr.move_to(register);
+                let lock = self.inner.read().await;
+                let name = lock.registers.get(&register).ok_or_else(|| {
+                    Error::msg(format!(
+                        "register {register} does not point to any workspace"
+                    ))
+                })?;
+
+                hypr.move_to(name);
             }
             "read" => {
                 const READ: Signature = Signature {
