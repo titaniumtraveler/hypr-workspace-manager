@@ -205,6 +205,7 @@ impl Server {
 
                 let mut parser = READ.parser(input);
                 let name: Option<&str> = parser.parse_param()?;
+                parser.finish()?;
 
                 let lock = self.inner.read().await;
                 if let Some(name) = name {
