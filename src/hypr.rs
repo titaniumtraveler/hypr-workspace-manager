@@ -43,6 +43,7 @@ impl Hypr {
     pub async fn send(&self, reply: Option<&mut String>) -> Result<()> {
         let mut socket = UnixStream::connect(&self.socket_path).await?;
         socket.write_all(self.buffer.as_bytes()).await?;
+        socket.flush().await?;
         if let Some(reply) = reply {
             socket.read_to_string(reply).await?;
         }
