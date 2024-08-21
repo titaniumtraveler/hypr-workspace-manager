@@ -123,6 +123,7 @@ impl<'a> SignatureParser<'a> {
             };
             if let Type::Opt = ty {
                 self.is_required = false;
+                self.index += 1;
             } else {
                 break ty;
             }
@@ -139,7 +140,10 @@ impl<'a> SignatureParser<'a> {
                 out
             }
             (None, true) => Err(self.err(Some(T::TYPE), None)),
-            (None, false) => Ok(T::default()),
+            (None, false) => {
+                self.index += 1;
+                Ok(T::default())
+            }
         }
     }
 
