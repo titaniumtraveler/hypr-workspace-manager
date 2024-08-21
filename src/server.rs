@@ -9,10 +9,11 @@ use std::{
     env::VarError,
     fmt::{Debug, Write},
     path::Path,
+    str::from_utf8,
     sync::Arc,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufStream},
     net::{unix::SocketAddr, UnixListener, UnixStream},
     sync::RwLock,
 };
@@ -56,7 +57,7 @@ impl Server {
         let socket = UnixListener::bind(hypr_dir.with_filename("ws-mgr.sock"))?;
 
         while let Ok((stream, socket)) = socket.accept().await {
-            tokio::spawn(Self::handle_message(
+            tokio::spawn(Self::handle_client(
                 Arc::clone(&self),
                 stream,
                 socket,
@@ -68,20 +69,56 @@ impl Server {
     }
 
     #[instrument]
-    pub async fn handle_message(
+    pub async fn handle_client(
         self: Arc<Self>,
-        mut stream: UnixStream,
-        socket: SocketAddr,
-        path: Arc<Path>,
+        stream: UnixStream,
+        _socket: SocketAddr,
+        hypr_path: Arc<Path>,
     ) -> Result<()> {
-        let mut input = String::new();
-        stream.read_to_string(&mut input).await?;
+        let mut stream = BufStream::new(stream);
+        let mut hypr = Hypr::new(&hypr_path);
 
+        let mut input_buf = Vec::<u8>::new();
+        let mut reply_buf = String::new();
+        let mut err_buf = String::new();
+
+        loop {
+            stream.read_until(b'\n', &mut input_buf).await?;
+
+            if input_buf.is_empty() {
+                break;
+            }
+
+            if let Err(err) = self
+                .handle_message(&mut stream, &mut hypr, &input_buf, &mut reply_buf)
+                .await
+            {
+                err_buf.write_fmt(format_args!("{}", err))?;
+                let res = stream.write_all(err_buf.as_bytes()).await;
+                err_buf.clear();
+                res?;
+                stream.flush().await?;
+            }
+        }
+
+        hypr.flush(Some(&mut reply_buf)).await?;
+        stream.write_all(reply_buf.as_ref()).await?;
+        reply_buf.clear();
+
+        Ok(())
+    }
+
+    #[instrument]
+    pub async fn handle_message(
+        &self,
+        stream: &mut BufStream<UnixStream>,
+        hypr: &mut Hypr,
+        input: &[u8],
+        reply: &mut String,
+    ) -> Result<()> {
+        let input = from_utf8(input)?;
         let (cmd, input) =
-            Signature::parse_cmd(&input).ok_or_else(|| Error::msg("expected param"))?;
-
-        let mut hypr = Hypr::new();
-
+            Signature::parse_cmd(input).ok_or_else(|| Error::msg("expected param"))?;
         match cmd {
             "create" => {
                 const CREATE: Signature = Signature {
@@ -143,8 +180,6 @@ impl Server {
                 parser.finish()?;
 
                 hypr.go_to(register);
-                hypr.send(&path).await?;
-                hypr.clear()
             }
             "move_to" => {
                 const MOVE_TO: Signature = Signature {
@@ -157,8 +192,6 @@ impl Server {
                 parser.finish()?;
 
                 hypr.move_to(register);
-                hypr.send(&path).await?;
-                hypr.clear()
             }
             "read" => {
                 const READ: Signature = Signature {
@@ -186,10 +219,21 @@ impl Server {
                     stream.write_all(buf.as_bytes()).await?;
                 }
             }
+            "flush" => {
+                const FLUSH: Signature = Signature {
+                    cmd: "flush",
+                    params: &[],
+                };
+
+                FLUSH.parser(input).finish()?;
+
+                hypr.flush(Some(reply)).await?;
+                stream.write_all(reply.as_bytes()).await?;
+                reply.clear();
+                stream.flush().await?;
+            }
             _ => return Err(Error::msg("invalid command")),
         }
-
-        stream.shutdown().await?;
 
         Ok(())
     }

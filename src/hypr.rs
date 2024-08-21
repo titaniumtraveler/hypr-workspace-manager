@@ -1,31 +1,51 @@
 use anyhow::Result;
 use std::{
     fmt::{Display, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
-use tokio::{io::AsyncWriteExt, net::UnixStream};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::UnixStream,
+};
 
 #[derive(Debug)]
 pub struct Hypr {
     buffer: String,
+    socket_path: PathBuf,
 }
 
+const BATCH: &str = "[[BATCH]]";
+
 impl Hypr {
-    pub fn new() -> Self {
+    pub fn new(socket_path: &Path) -> Self {
         Self {
-            buffer: String::from("[[BATCH]]"),
+            buffer: String::from(BATCH),
+            socket_path: socket_path.into(),
         }
     }
 
     pub fn clear(&mut self) {
-        self.buffer.truncate("[[BATCH]]".len())
+        self.buffer.truncate(BATCH.len())
     }
 
-    pub async fn send(&self, path: &Path) -> Result<()> {
-        UnixStream::connect(path)
-            .await?
-            .write_all(self.buffer.as_bytes())
-            .await?;
+    /// Flush current buffer to socket and clear the buffer afterwards.
+    ///
+    /// Only actually sends, if the buffer contains messages to be sent.
+    /// If an error occurs while sending, the buffer is not flushed!
+    pub async fn flush(&mut self, reply: Option<&mut String>) -> Result<()> {
+        if BATCH.len() < self.buffer.len() {
+            self.send(reply).await?;
+            self.clear();
+        }
+        Ok(())
+    }
+
+    pub async fn send(&self, reply: Option<&mut String>) -> Result<()> {
+        let mut socket = UnixStream::connect(&self.socket_path).await?;
+        socket.write_all(self.buffer.as_bytes()).await?;
+        if let Some(reply) = reply {
+            socket.read_to_string(reply).await?;
+        }
         Ok(())
     }
 }
@@ -39,11 +59,5 @@ impl Hypr {
     pub fn move_to(&mut self, workspace: impl Display) {
         write!(self.buffer, "/dispatch movetoworkspace {workspace};")
             .expect("writing to string doesn't fail");
-    }
-}
-
-impl Default for Hypr {
-    fn default() -> Self {
-        Self::new()
     }
 }
