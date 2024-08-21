@@ -19,7 +19,6 @@ use tokio::{
     net::{unix::SocketAddr, UnixListener, UnixStream},
     sync::RwLock,
 };
-use tracing::{error, instrument};
 
 mod signature;
 
@@ -39,16 +38,14 @@ impl Server {
         let instance = match std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {
             Ok(instance) => instance,
             Err(VarError::NotPresent) => {
-                error!("expected to be started in the context of a running hyprland instance");
                 return Err(Error::msg(
                     "expected to be started in the context of a running hyprland instance",
                 ));
             }
             Err(VarError::NotUnicode(var)) => {
-                error!("invalid hyprland instance signature {var:?}, expected it to be unicode");
-                return Err(Error::msg(
-                    "invalid hyprland instance signature {var:?}, expected it to be unicode",
-                ));
+                return Err(Error::msg(format!(
+                    "invalid hyprland instance signature {var:?}, expected it to be unicode"
+                )));
             }
         };
 
@@ -76,11 +73,10 @@ impl Server {
         Ok(())
     }
 
-    #[instrument]
     pub async fn handle_client(
         self: Arc<Self>,
         stream: UnixStream,
-        _socket: SocketAddr,
+        _: SocketAddr,
         hypr_path: Arc<Path>,
     ) -> Result<()> {
         let mut stream = BufStream::new(stream);
@@ -116,7 +112,6 @@ impl Server {
         Ok(())
     }
 
-    #[instrument]
     pub async fn handle_message(
         &self,
         stream: &mut BufStream<UnixStream>,
