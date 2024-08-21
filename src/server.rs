@@ -210,19 +210,17 @@ impl Server {
                 let lock = self.inner.read().await;
                 if let Some(name) = name {
                     if let Some((name, settings)) = lock.workspaces.get_key_value(name) {
-                        let mut buf = String::new();
-                        writeln!(buf, "{name}: {settings:?}")
+                        writeln!(reply, "{name}: {settings:?}")
                             .expect("writing to string never fails");
-                        stream.write_all(buf.as_bytes()).await?;
                     }
                 } else {
-                    let mut buf = String::new();
                     for (name, settings) in lock.workspaces.iter() {
-                        writeln!(buf, "{name}: {settings:?}")
+                        writeln!(reply, "{name}: {settings:?}")
                             .expect("writing to string never fails");
                     }
-                    stream.write_all(buf.as_bytes()).await?;
                 }
+                stream.write_all(reply.as_bytes()).await?;
+                reply.clear();
             }
             "flush" => {
                 const FLUSH: Signature = Signature {
