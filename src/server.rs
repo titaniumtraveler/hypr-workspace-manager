@@ -8,11 +8,13 @@ use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
     env::VarError,
     fmt::{Debug, Write},
+    io::ErrorKind,
     path::Path,
     str::from_utf8,
     sync::Arc,
 };
 use tokio::{
+    fs::remove_file,
     io::{AsyncBufReadExt, AsyncWriteExt, BufStream},
     net::{unix::SocketAddr, UnixListener, UnixStream},
     sync::RwLock,
@@ -54,7 +56,13 @@ impl Server {
             PathBuilder::from_basepath(format_args!("/run/user/1000/hypr/{instance}"));
 
         let hypr_path: Arc<Path> = hypr_dir.with_filename(".socket.sock").into();
-        let socket = UnixListener::bind(hypr_dir.with_filename("ws-mgr.sock"))?;
+        let socket = hypr_dir.with_filename("ws-mgr.sock");
+        if let Err(err) = remove_file(socket).await {
+            if err.kind() != ErrorKind::NotFound {
+                return Err(err.into());
+            }
+        }
+        let socket = UnixListener::bind(socket)?;
 
         while let Ok((stream, socket)) = socket.accept().await {
             tokio::spawn(Self::handle_client(
