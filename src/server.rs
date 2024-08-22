@@ -1,5 +1,5 @@
 use crate::{
-    hypr::Hypr,
+    hypr::{Hypr, Workspace},
     path_builder::PathBuilder,
     server::signature::{Signature, Type},
 };
@@ -216,7 +216,7 @@ impl Server {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
-                hypr.go_to(name);
+                hypr.go_to(Workspace::Name(name));
             }
             "move_to" => {
                 const MOVE_TO: Signature = Signature {
@@ -233,7 +233,7 @@ impl Server {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
-                hypr.move_to(name);
+                hypr.move_to(Workspace::Name(name));
             }
             "read" => {
                 const READ: Signature = Signature {

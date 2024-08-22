@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::{
-    fmt::{Display, Write},
+    fmt::{self, Display, Formatter, Write},
     path::{Path, PathBuf},
 };
 use tokio::{
@@ -55,13 +55,43 @@ impl Hypr {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Workspace<'a> {
+    Id(i32),
+    RelativeId(i32),
+    RelativeMonitor(i32),
+    RelativeMonitorEmpty(i32),
+    RelativeOpen(i32),
+    Previous,
+    Empty,
+    Name(&'a str),
+    Special(Option<&'a str>),
+}
+
+impl Display for Workspace<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Workspace::Id(id) => write!(f, "{id}"),
+            Workspace::RelativeId(rel) => write!(f, "{rel:+}"),
+            Workspace::RelativeMonitor(rel) => write!(f, "m{rel:+}"),
+            Workspace::RelativeMonitorEmpty(rel) => write!(f, "r{rel:+}"),
+            Workspace::RelativeOpen(open) => write!(f, "e{open:+}"),
+            Workspace::Previous => write!(f, "previous"),
+            Workspace::Empty => write!(f, "empty"),
+            Workspace::Name(name) => write!(f, "name:{name}"),
+            Workspace::Special(None) => write!(f, "special"),
+            Workspace::Special(Some(name)) => write!(f, "special:{name}"),
+        }
+    }
+}
+
 impl Hypr {
-    pub fn go_to(&mut self, workspace: impl Display) {
+    pub fn go_to(&mut self, workspace: Workspace) {
         write!(self.buffer, "/dispatch workspace {workspace};")
             .expect("writing to string doesn't fail");
     }
 
-    pub fn move_to(&mut self, workspace: impl Display) {
+    pub fn move_to(&mut self, workspace: Workspace) {
         write!(self.buffer, "/dispatch movetoworkspace {workspace};")
             .expect("writing to string doesn't fail");
     }
