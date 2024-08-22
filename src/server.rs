@@ -19,6 +19,7 @@ use tokio::{
     net::{unix::SocketAddr, UnixListener, UnixStream},
     sync::RwLock,
 };
+use tracing::{debug, error, info, info_span, warn, Instrument};
 
 mod signature;
 
@@ -62,12 +63,18 @@ impl Server {
         let socket = UnixListener::bind(socket)?;
 
         while let Ok((stream, socket)) = socket.accept().await {
-            tokio::spawn(Self::handle_client(
-                Arc::clone(&self),
-                stream,
-                socket,
-                Arc::clone(&hypr_path),
-            ));
+            tokio::spawn({
+                let server_state = Arc::clone(&self);
+                let hypr_path = Arc::clone(&hypr_path);
+
+                async {
+                    let res = server_state.handle_client(stream, socket, hypr_path).await;
+                    if let Err(err) = res {
+                        error!(?err, "client failed with {err}");
+                    }
+                }
+                .instrument(info_span!("client"))
+            });
         }
 
         Ok(())
@@ -79,6 +86,8 @@ impl Server {
         _: SocketAddr,
         hypr_path: Arc<Path>,
     ) -> Result<()> {
+        info!("connected");
+
         let mut stream = BufStream::new(stream);
         let mut hypr = Hypr::new(&hypr_path);
 
@@ -87,27 +96,47 @@ impl Server {
         let mut err_buf = String::new();
 
         loop {
-            input_buf.clear();
-            stream.read_until(b'\n', &mut input_buf).await?;
+            let span = info_span!("message");
+
+            async {
+                input_buf.clear();
+                debug!("waiting for input");
+                let bytes = stream.read_until(b'\n', &mut input_buf).await?;
+                debug!(bytes, "read {bytes} bytes");
+
+                Result::<_, anyhow::Error>::Ok(())
+            }
+            .instrument(span.clone())
+            .await?;
 
             if input_buf.is_empty() {
                 break;
             }
 
-            if let Err(err) = self
-                .handle_message(&mut stream, &mut hypr, &input_buf, &mut reply_buf)
-                .await
-            {
-                err_buf.clear();
-                err_buf.write_fmt(format_args!("{}", err))?;
-                stream.write_all(err_buf.as_bytes()).await?;
-                stream.flush().await?;
+            async {
+                if let Err(err) = self
+                    .handle_message(&mut stream, &mut hypr, &input_buf, &mut reply_buf)
+                    .await
+                {
+                    warn!(?err, "error processing message");
+
+                    err_buf.clear();
+                    err_buf.write_fmt(format_args!("{}", err))?;
+                    stream.write_all(err_buf.as_bytes()).await?;
+                    stream.flush().await?;
+                }
+
+                Result::<_, anyhow::Error>::Ok(())
             }
+            .instrument(span.clone())
+            .await?;
         }
 
         hypr.flush(Some(&mut reply_buf)).await?;
         stream.write_all(reply_buf.as_ref()).await?;
         reply_buf.clear();
+
+        info!("disconnected");
 
         Ok(())
     }
@@ -120,6 +149,7 @@ impl Server {
         reply: &mut String,
     ) -> Result<()> {
         let input = from_utf8(input)?;
+        debug!(input, "input");
         let (cmd, input) = Signature::parse_cmd(input).ok_or_else(|| anyhow!("expected param"))?;
         match cmd {
             "create" => {

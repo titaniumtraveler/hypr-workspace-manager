@@ -7,6 +7,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
 };
+use tracing::{debug, instrument};
 
 #[derive(Debug)]
 pub struct Hypr {
@@ -40,12 +41,15 @@ impl Hypr {
         Ok(())
     }
 
+    #[instrument(name = "hypr", skip(self, reply))]
     pub async fn send(&self, reply: Option<&mut String>) -> Result<()> {
         let mut socket = UnixStream::connect(&self.socket_path).await?;
         socket.write_all(self.buffer.as_bytes()).await?;
+        debug!(request = &self.buffer, "request");
         socket.flush().await?;
         if let Some(reply) = reply {
             socket.read_to_string(reply).await?;
+            debug!(reply = &reply, "reply");
         }
         Ok(())
     }
