@@ -148,7 +148,7 @@ impl Server {
         input: &[u8],
         reply: &mut String,
     ) -> Result<()> {
-        let input = from_utf8(input)?;
+        let input = from_utf8(input)?.trim_end_matches('\n');
         debug!(input, "input");
         let (cmd, input) = Signature::parse_cmd(input).ok_or_else(|| anyhow!("expected param"))?;
         match cmd {
