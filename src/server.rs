@@ -19,7 +19,7 @@ use tokio::{
     net::{unix::SocketAddr, UnixListener, UnixStream},
     sync::RwLock,
 };
-use tracing::{debug, error, info, info_span, warn, Instrument};
+use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
 
 mod signature;
 
@@ -35,6 +35,7 @@ struct Inner {
 }
 
 impl Server {
+    #[instrument(name = "socket server", skip(self), err)]
     pub async fn run(self: Arc<Self>) -> Result<()> {
         let instance = match std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {
             Ok(instance) => instance,
