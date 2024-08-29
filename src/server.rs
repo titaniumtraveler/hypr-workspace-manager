@@ -97,24 +97,16 @@ impl Server {
         let mut err_buf = String::new();
 
         loop {
-            let span = info_span!("message");
-
-            async {
+            let res = async {
                 input_buf.clear();
                 debug!("waiting for input");
                 let bytes = stream.read_until(b'\n', &mut input_buf).await?;
                 debug!(bytes, "read {bytes} bytes");
 
-                Result::<_, anyhow::Error>::Ok(())
-            }
-            .instrument(span.clone())
-            .await?;
+                if input_buf.is_empty() {
+                    return Ok(false);
+                }
 
-            if input_buf.is_empty() {
-                break;
-            }
-
-            async {
                 if let Err(err) = self
                     .handle_message(&mut stream, &mut hypr, &input_buf, &mut reply_buf)
                     .await
@@ -127,10 +119,14 @@ impl Server {
                     stream.flush().await?;
                 }
 
-                Result::<_, anyhow::Error>::Ok(())
+                Result::<_, anyhow::Error>::Ok(true)
             }
-            .instrument(span.clone())
-            .await?;
+            .instrument(info_span!("message"))
+            .await;
+
+            if !res? {
+                break;
+            }
         }
 
         hypr.flush(Some(&mut reply_buf)).await?;
