@@ -2,21 +2,20 @@ use crate::{
     hypr::{Hypr, Workspace},
     path_builder::PathBuilder,
     server::signature::{Signature, Type},
+    socket::Socket,
 };
 use anyhow::{anyhow, Result};
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
     env::VarError,
-    fmt::{Debug, Write},
+    fmt::Write,
     io::ErrorKind,
     path::Path,
-    str::from_utf8,
     sync::Arc,
 };
 use tokio::{
     fs::remove_file,
-    io::{AsyncBufReadExt, AsyncWriteExt, BufStream},
-    net::{unix::SocketAddr, UnixListener, UnixStream},
+    net::{unix::SocketAddr, UnixListener},
     sync::RwLock,
 };
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
@@ -69,7 +68,9 @@ impl Server {
                 let hypr_path = Arc::clone(&hypr_path);
 
                 async {
-                    let res = server_state.handle_client(stream, socket, hypr_path).await;
+                    let res = server_state
+                        .handle_client(Socket::from_unixstream(stream), socket, hypr_path)
+                        .await;
                     if let Err(err) = res {
                         error!(?err, "client failed with {err}");
                     }
@@ -83,39 +84,25 @@ impl Server {
 
     pub async fn handle_client(
         self: Arc<Self>,
-        stream: UnixStream,
+        mut stream: Socket,
         _: SocketAddr,
         hypr_path: Arc<Path>,
     ) -> Result<()> {
         info!("connected");
 
-        let mut stream = BufStream::new(stream);
         let mut hypr = Hypr::new(&hypr_path);
-
-        let mut input_buf = Vec::<u8>::new();
-        let mut reply_buf = String::new();
-        let mut err_buf = String::new();
 
         loop {
             let res = async {
-                input_buf.clear();
                 debug!("waiting for input");
-                let bytes = stream.read_until(b'\n', &mut input_buf).await?;
-                debug!(bytes, "read {bytes} bytes");
-
-                if input_buf.is_empty() {
+                if !stream.fetch_msg().await? {
                     return Ok(false);
                 }
 
-                if let Err(err) = self
-                    .handle_message(&mut stream, &mut hypr, &input_buf, &mut reply_buf)
-                    .await
-                {
+                if let Err(err) = self.handle_message(&mut stream, &mut hypr).await {
                     warn!(?err, "error processing message");
 
-                    err_buf.clear();
-                    err_buf.write_fmt(format_args!("{}", err))?;
-                    stream.write_all(err_buf.as_bytes()).await?;
+                    write!(stream, "{}", err)?;
                     stream.flush().await?;
                 }
 
@@ -129,25 +116,18 @@ impl Server {
             }
         }
 
-        hypr.flush(Some(&mut reply_buf)).await?;
-        stream.write_all(reply_buf.as_ref()).await?;
-        reply_buf.clear();
+        hypr.flush(Some(&mut stream.write_buf)).await?;
+        stream.flush().await?;
 
         info!("disconnected");
 
         Ok(())
     }
 
-    pub async fn handle_message(
-        &self,
-        stream: &mut BufStream<UnixStream>,
-        hypr: &mut Hypr,
-        input: &[u8],
-        reply: &mut String,
-    ) -> Result<()> {
-        let input = from_utf8(input)?.trim_end_matches('\n');
-        debug!(input, "input");
-        let (cmd, input) = Signature::parse_cmd(input).ok_or_else(|| anyhow!("expected param"))?;
+    pub async fn handle_message<'a>(&self, stream: &'a mut Socket, hypr: &mut Hypr) -> Result<()> {
+        let msg = stream.msg()?;
+        debug!(msg, "input");
+        let (cmd, input) = Signature::parse_cmd(msg).ok_or_else(|| anyhow!("expected param"))?;
         match cmd {
             "create" => {
                 const CREATE: Signature = Signature {
@@ -245,17 +225,15 @@ impl Server {
                 let lock = self.inner.read().await;
                 if let Some(name) = name {
                     if let Some((name, settings)) = lock.workspaces.get_key_value(name) {
-                        writeln!(reply, "{name}: {settings:?}")
+                        writeln!(stream, "{name}: {settings:?}")
                             .expect("writing to string never fails");
                     }
                 } else {
                     for (name, settings) in lock.workspaces.iter() {
-                        writeln!(reply, "{name}: {settings:?}")
+                        writeln!(stream, "{name}: {settings:?}")
                             .expect("writing to string never fails");
                     }
                 }
-                stream.write_all(reply.as_bytes()).await?;
-                reply.clear();
             }
             "flush" => {
                 const FLUSH: Signature = Signature {
@@ -265,9 +243,7 @@ impl Server {
 
                 FLUSH.parser(input).finish()?;
 
-                hypr.flush(Some(reply)).await?;
-                stream.write_all(reply.as_bytes()).await?;
-                reply.clear();
+                hypr.flush(Some(&mut stream.write_buf)).await?;
                 stream.flush().await?;
             }
             inv_cmd => return Err(anyhow!("expected valid command, got `{inv_cmd}`")),
