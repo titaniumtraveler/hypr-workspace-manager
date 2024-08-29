@@ -29,19 +29,15 @@ impl Socket {
         Ok(Self::from_unixstream(socket))
     }
 
-    pub async fn read_msg<'msg>(
-        stream: &mut BufStream<UnixStream>,
-        read_buf: &'msg mut Vec<u8>,
-    ) -> Result<Option<&'msg str>> {
-        read_buf.clear();
-        stream.read_until(b'\n', read_buf).await?;
+    pub async fn fetch_msg(&mut self) -> Result<bool> {
+        self.read_buf.clear();
+        self.inner.read_until(b'\n', &mut self.read_buf).await?;
 
-        if read_buf.is_empty() {
-            return Ok(None);
-        }
+        Ok(!self.read_buf.is_empty())
+    }
 
-        let message = from_utf8(read_buf)?.trim_end_matches('\n');
-        Ok(Some(message))
+    pub fn msg(&self) -> Result<&str> {
+        from_utf8(&self.read_buf).map_err(Into::into)
     }
 
     pub async fn flush(&mut self) -> Result<()> {
