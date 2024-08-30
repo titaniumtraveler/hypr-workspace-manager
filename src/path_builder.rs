@@ -1,4 +1,6 @@
+use anyhow::{anyhow, Result};
 use std::{
+    env::VarError,
     fmt::{Display, Write},
     path::{Path, PathBuf},
 };
@@ -22,5 +24,27 @@ impl PathBuilder {
         self.path.pop();
         self.path.push(name);
         &self.path
+    }
+}
+
+impl PathBuilder {
+    pub fn hypr_basepath() -> Result<Self> {
+        let instance = match std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {
+            Ok(instance) => instance,
+            Err(VarError::NotPresent) => {
+                return Err(anyhow!(
+                    "expected to be started in the context of a running hyprland instance",
+                ));
+            }
+            Err(VarError::NotUnicode(var)) => {
+                return Err(anyhow!(
+                    "invalid hyprland instance signature {var:?}, expected it to be unicode"
+                ));
+            }
+        };
+
+        Ok(PathBuilder::from_basepath(format_args!(
+            "/run/user/1000/hypr/{instance}"
+        )))
     }
 }

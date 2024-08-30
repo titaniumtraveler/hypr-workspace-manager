@@ -7,7 +7,6 @@ use crate::{
 use anyhow::{anyhow, Result};
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
-    env::VarError,
     fmt::Write,
     io::ErrorKind,
     path::Path,
@@ -36,22 +35,7 @@ struct Inner {
 impl Server {
     #[instrument(name = "socket server", skip(self), err)]
     pub async fn run(self: Arc<Self>) -> Result<()> {
-        let instance = match std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {
-            Ok(instance) => instance,
-            Err(VarError::NotPresent) => {
-                return Err(anyhow!(
-                    "expected to be started in the context of a running hyprland instance",
-                ));
-            }
-            Err(VarError::NotUnicode(var)) => {
-                return Err(anyhow!(
-                    "invalid hyprland instance signature {var:?}, expected it to be unicode"
-                ));
-            }
-        };
-
-        let mut hypr_dir =
-            PathBuilder::from_basepath(format_args!("/run/user/1000/hypr/{instance}"));
+        let mut hypr_dir = PathBuilder::hypr_basepath()?;
 
         let hypr_path: Arc<Path> = hypr_dir.with_filename(".socket.sock").into();
         let socket = hypr_dir.with_filename("ws-mgr.sock");
