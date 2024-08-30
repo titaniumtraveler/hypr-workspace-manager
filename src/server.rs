@@ -162,9 +162,9 @@ impl Server {
                 let mut lock = self.inner.write().await;
                 lock.registers.remove(&register);
             }
-            "go_to" => {
+            "goto" => {
                 const GO_TO: Signature = Signature {
-                    cmd: "go_to",
+                    cmd: "goto",
                     params: &[("register", Type::U8)],
                 };
 
@@ -179,9 +179,9 @@ impl Server {
 
                 hypr.go_to(Workspace::Name(name));
             }
-            "move_to" => {
+            "moveto" => {
                 const MOVE_TO: Signature = Signature {
-                    cmd: "move_to",
+                    cmd: "moveto",
                     params: &[("register", Type::U8)],
                 };
 
