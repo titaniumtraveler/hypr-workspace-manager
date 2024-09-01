@@ -111,7 +111,7 @@ impl Server {
     }
 
     pub async fn handle_message<'a>(&self, stream: &'a mut Socket, hypr: &mut Hypr) -> Result<()> {
-        let msg = stream.msg()?;
+        let msg = stream.msg()?.trim_end_matches('\n');
         debug!(msg, "input");
         let (cmd, input) = Signature::parse_cmd(msg).ok_or_else(|| anyhow!("expected param"))?;
         match cmd {
