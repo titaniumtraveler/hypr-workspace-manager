@@ -5,7 +5,7 @@ use std::{
     str::from_utf8,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufStream},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream},
     net::UnixStream,
 };
 
@@ -38,6 +38,11 @@ impl Socket {
 
     pub fn msg(&self) -> Result<&str> {
         from_utf8(&self.read_buf).map_err(Into::into)
+    }
+
+    pub async fn read_all(&mut self) -> Result<&[u8]> {
+        self.inner.read_to_end(&mut self.read_buf).await?;
+        Ok(&self.read_buf)
     }
 
     pub async fn flush(&mut self) -> Result<()> {
