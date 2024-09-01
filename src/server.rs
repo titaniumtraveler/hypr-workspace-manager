@@ -33,12 +33,14 @@ struct Inner {
 }
 
 impl Server {
+    pub const SOCKET: &'static str = "ws-mgr.sock";
+
     #[instrument(name = "socket server", skip(self), err)]
     pub async fn run(self: Arc<Self>) -> Result<()> {
         let mut hypr_dir = PathBuilder::hypr_basepath()?;
 
         let hypr_path: Arc<Path> = hypr_dir.with_filename(".socket.sock").into();
-        let socket = hypr_dir.with_filename("ws-mgr.sock");
+        let socket = hypr_dir.with_filename(Self::SOCKET);
         if let Err(err) = remove_file(socket).await {
             if err.kind() != ErrorKind::NotFound {
                 return Err(err.into());
