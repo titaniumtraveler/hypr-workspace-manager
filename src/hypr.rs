@@ -92,7 +92,7 @@ impl Hypr {
     }
 
     pub fn move_to(&mut self, workspace: Workspace) {
-        write!(self.buffer, "/dispatch movetoworkspace {workspace};")
+        write!(self.buffer, "/dispatch movetoworkspacesilent {workspace};")
             .expect("writing to string doesn't fail");
     }
 }
