@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Write},
     path::Path,
@@ -50,6 +51,21 @@ impl Socket {
         self.write_buf.clear();
         self.inner.flush().await?;
         res.map_err(Into::into)
+    }
+}
+
+impl Socket {
+    pub fn read_msg<'a, T: Deserialize<'a>>(&'a self) -> Result<T> {
+        let mut de = serde_json::Deserializer::from_slice(&self.read_buf);
+        let msg = Deserialize::deserialize(&mut de)?;
+        de.end()?;
+
+        Ok(msg)
+    }
+
+    pub fn write_msg<T: Serialize>(&mut self, msg: &T) -> Result<()> {
+        let mut se = serde_json::Serializer::new(&mut self.write_buf);
+        Serialize::serialize(msg, &mut se).map_err(Into::into)
     }
 }
 
