@@ -1,4 +1,4 @@
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use std::{
     fmt::{self, Write},
     path::Path,
@@ -12,7 +12,7 @@ use tokio::{
 pub struct Socket {
     pub inner: BufStream<UnixStream>,
     pub read_buf: Vec<u8>,
-    pub write_buf: String,
+    pub write_buf: Vec<u8>,
 }
 
 impl Socket {
@@ -46,7 +46,7 @@ impl Socket {
     }
 
     pub async fn flush(&mut self) -> Result<()> {
-        let res = self.inner.write_all(self.write_buf.as_bytes()).await;
+        let res = self.inner.write_all(&self.write_buf).await;
         self.write_buf.clear();
         self.inner.flush().await?;
         res.map_err(Into::into)
@@ -55,6 +55,7 @@ impl Socket {
 
 impl Write for Socket {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.write_buf.write_str(s)
+        self.write_buf.extend_from_slice(s.as_bytes());
+        Ok(())
     }
 }
