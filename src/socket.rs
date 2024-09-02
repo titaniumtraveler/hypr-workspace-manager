@@ -48,6 +48,7 @@ impl Socket {
     pub async fn flush(&mut self) -> Result<()> {
         let res = self.inner.write_all(self.write_buf.as_bytes()).await;
         self.write_buf.clear();
+        self.inner.flush().await?;
         res.map_err(Into::into)
     }
 }
