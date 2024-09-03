@@ -65,7 +65,9 @@ impl Socket {
 
     pub fn write_msg<T: Serialize>(&mut self, msg: &T) -> Result<()> {
         let mut se = serde_json::Serializer::new(&mut self.write_buf);
-        Serialize::serialize(msg, &mut se).map_err(Into::into)
+        Serialize::serialize(msg, &mut se)?;
+        self.write_buf.push(b'\n');
+        Ok(())
     }
 }
 

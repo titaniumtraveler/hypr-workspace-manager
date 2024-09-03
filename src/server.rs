@@ -1,7 +1,7 @@
 use crate::{
     hypr::{Hypr, Workspace},
     path_builder::PathBuilder,
-    server::signature::{Signature, Type},
+    server::types::Request,
     socket::Socket,
 };
 use anyhow::{anyhow, Result};
@@ -19,7 +19,7 @@ use tokio::{
 };
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
 
-mod signature;
+pub mod types;
 
 #[derive(Debug, Default)]
 pub struct Server {
@@ -111,37 +111,17 @@ impl Server {
     }
 
     pub async fn handle_message<'a>(&self, stream: &'a mut Socket, hypr: &mut Hypr) -> Result<()> {
-        let msg = stream.msg()?.trim_end_matches('\n');
-        debug!(msg, "input");
-        let (cmd, input) = Signature::parse_cmd(msg).ok_or_else(|| anyhow!("expected param"))?;
-        match cmd {
-            "create" => {
-                const CREATE: Signature = Signature {
-                    cmd: "create",
-                    params: &[("name", Type::Str)],
-                };
-
-                let mut parser = CREATE.parser(input);
-                let name: &str = parser.parse_param()?;
-                parser.finish()?;
-
+        let request: Request = stream.read_msg()?;
+        debug!(?request, "input");
+        match request {
+            Request::Create { name } => {
                 let mut lock = self.inner.write().await;
                 match lock.workspaces.entry(name.into()) {
                     Entry::Vacant(vacant) => vacant.insert(WorkspaceSettings::default()),
                     Entry::Occupied(_) => return Err(anyhow!("name already in use")),
                 };
             }
-            "bind" => {
-                const BIND: Signature = Signature {
-                    cmd: "bind",
-                    params: &[("name", Type::Str), ("register", Type::U8)],
-                };
-
-                let mut parser = BIND.parser(input);
-                let name = parser.parse_param()?;
-                let register = parser.parse_param()?;
-                parser.finish()?;
-
+            Request::Bind { name, register } => {
                 let mut lock = self.inner.write().await;
                 let name = lock
                     .workspaces
@@ -151,29 +131,11 @@ impl Server {
 
                 lock.registers.insert(register, name);
             }
-            "unbind" => {
-                const UNBIND: Signature = Signature {
-                    cmd: "unbind",
-                    params: &[("register", Type::U8)],
-                };
-
-                let mut parser = UNBIND.parser(input);
-                let register = parser.parse_param()?;
-                parser.finish()?;
-
+            Request::Unbind { register } => {
                 let mut lock = self.inner.write().await;
                 lock.registers.remove(&register);
             }
-            "goto" => {
-                const GO_TO: Signature = Signature {
-                    cmd: "goto",
-                    params: &[("register", Type::U8)],
-                };
-
-                let mut parser = GO_TO.parser(input);
-                let register: u8 = parser.parse_param()?;
-                parser.finish()?;
-
+            Request::Goto { register } => {
                 let lock = self.inner.read().await;
                 let name = lock.registers.get(&register).ok_or_else(|| {
                     anyhow!("register {register} does not point to any workspace")
@@ -181,16 +143,7 @@ impl Server {
 
                 hypr.go_to(Workspace::Name(name));
             }
-            "moveto" => {
-                const MOVE_TO: Signature = Signature {
-                    cmd: "moveto",
-                    params: &[("register", Type::U8)],
-                };
-
-                let mut parser = MOVE_TO.parser(input);
-                let register: u8 = parser.parse_param()?;
-                parser.finish()?;
-
+            Request::Moveto { register } => {
                 let lock = self.inner.read().await;
                 let name = lock.registers.get(&register).ok_or_else(|| {
                     anyhow!("register {register} does not point to any workspace")
@@ -198,16 +151,7 @@ impl Server {
 
                 hypr.move_to(Workspace::Name(name));
             }
-            "read" => {
-                const READ: Signature = Signature {
-                    cmd: "read",
-                    params: &[("", Type::Opt), ("name", Type::Str)],
-                };
-
-                let mut parser = READ.parser(input);
-                let name: Option<&str> = parser.parse_param()?;
-                parser.finish()?;
-
+            Request::Read { name } => {
                 let lock = self.inner.read().await;
                 if let Some(name) = name {
                     if let Some((name, settings)) = lock.workspaces.get_key_value(name) {
@@ -221,18 +165,10 @@ impl Server {
                     }
                 }
             }
-            "flush" => {
-                const FLUSH: Signature = Signature {
-                    cmd: "flush",
-                    params: &[],
-                };
-
-                FLUSH.parser(input).finish()?;
-
+            Request::Flush => {
                 hypr.flush(Some(&mut stream.write_buf)).await?;
                 stream.flush().await?;
             }
-            inv_cmd => return Err(anyhow!("expected valid command, got `{inv_cmd}`")),
         }
 
         Ok(())
