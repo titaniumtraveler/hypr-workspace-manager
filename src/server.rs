@@ -1,10 +1,11 @@
 use crate::{
-    hypr::{Hypr, Workspace},
+    hypr::{Hypr, Workspace as HyprWorkspace},
     path_builder::PathBuilder,
     server::types::Request,
     socket::Socket,
 };
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
     fmt::Write,
@@ -18,6 +19,7 @@ use tokio::{
     sync::RwLock,
 };
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
+use types::{util::IterMap, ReadResponse, Workspace};
 
 pub mod types;
 
@@ -141,7 +143,7 @@ impl Server {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
-                hypr.go_to(Workspace::Name(name));
+                hypr.go_to(HyprWorkspace::Name(name));
             }
             Request::Moveto { register } => {
                 let lock = self.inner.read().await;
@@ -149,22 +151,51 @@ impl Server {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
-                hypr.move_to(Workspace::Name(name));
+                hypr.move_to(HyprWorkspace::Name(name));
             }
-            Request::Read { name } => {
-                let lock = self.inner.read().await;
-                if let Some(name) = name {
-                    if let Some((name, settings)) = lock.workspaces.get_key_value(name) {
-                        writeln!(stream, "{name}: {settings:?}")
-                            .expect("writing to string never fails");
-                    }
-                } else {
-                    for (name, settings) in lock.workspaces.iter() {
-                        writeln!(stream, "{name}: {settings:?}")
-                            .expect("writing to string never fails");
-                    }
+            Request::Read { workspace } => match workspace {
+                Some(Workspace::Workspace(name)) => {
+                    let guard = self.inner.read().await;
+                    let (name, settings) = guard
+                        .workspaces
+                        .get_key_value(name)
+                        .ok_or_else(|| anyhow!("{name} doesn't point to any valid workspace"))?;
+
+                    stream.write_msg(&ReadResponse {
+                        workspaces: IterMap::new([(name, settings)]),
+                        registers: IterMap::new(
+                            guard
+                                .registers
+                                .iter()
+                                .filter(|(_, register_pointee)| *register_pointee == name),
+                        ),
+                    })?;
                 }
-            }
+                Some(Workspace::Register(register)) => {
+                    let guard = self.inner.read().await;
+                    let name = guard
+                        .registers
+                        .get(&register)
+                        .ok_or_else(|| anyhow!("{register} does not point to any workspace"))?;
+
+                    let settings = guard
+                        .workspaces
+                        .get(name)
+                        .ok_or_else(|| anyhow!("{name} doesn't point to any valid workspace"))?;
+
+                    stream.write_msg(&ReadResponse {
+                        workspaces: IterMap::new([(name, settings)]),
+                        registers: IterMap::new([(register, name)]),
+                    })?;
+                }
+                None => {
+                    let guard = self.inner.read().await;
+                    stream.write_msg(&ReadResponse {
+                        workspaces: IterMap::new(&guard.workspaces),
+                        registers: IterMap::new(&guard.registers),
+                    })?;
+                }
+            },
             Request::Flush => {
                 hypr.flush(Some(&mut stream.write_buf)).await?;
                 stream.flush().await?;
@@ -175,7 +206,7 @@ impl Server {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct WorkspaceSettings {}
 
 #[allow(clippy::derivable_impls)]

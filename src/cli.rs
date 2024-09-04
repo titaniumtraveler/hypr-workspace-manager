@@ -1,11 +1,14 @@
 use crate::{
     path_builder::PathBuilder,
-    server::{types::Request, Server},
+    server::{
+        types::{Request, Workspace as WorkspaceRef},
+        Server,
+    },
     socket::Socket,
 };
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::sync::Arc;
+use std::{convert::Infallible, fmt::Debug, str::FromStr, sync::Arc};
 use tokio::io::{self, AsyncWriteExt};
 
 #[derive(Debug, Parser)]
@@ -22,7 +25,32 @@ enum Operation {
     Unbind { register: u8 },
     Goto { register: u8 },
     Moveto { register: u8 },
-    Read { name: Option<String> },
+    Read { workspace: Option<Workspace> },
+}
+
+#[derive(Debug, Clone)]
+enum Workspace {
+    Workspace(String),
+    Register(u8),
+}
+
+impl Workspace {
+    fn as_workspace_ref(&self) -> WorkspaceRef {
+        match self {
+            Workspace::Workspace(name) => WorkspaceRef::Workspace(name),
+            Workspace::Register(register) => WorkspaceRef::Register(*register),
+        }
+    }
+}
+
+impl FromStr for Workspace {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(s.parse()
+            .map(Workspace::Register)
+            .unwrap_or_else(|_| Workspace::Workspace(s.to_owned())))
+    }
 }
 
 impl Cli {
@@ -40,9 +68,9 @@ impl Cli {
             Operation::Unbind { register } => write_to_socket(Request::Unbind { register }).await,
             Operation::Goto { register } => write_to_socket(Request::Goto { register }).await,
             Operation::Moveto { register } => write_to_socket(Request::Moveto { register }).await,
-            Operation::Read { name } => {
+            Operation::Read { workspace } => {
                 write_to_socket(Request::Read {
-                    name: name.as_deref(),
+                    workspace: workspace.as_ref().map(Workspace::as_workspace_ref),
                 })
                 .await
             }

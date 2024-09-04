@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+pub use self::workspace::Workspace;
+
+mod workspace;
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Request<'a> {
@@ -8,6 +12,6 @@ pub enum Request<'a> {
     Unbind { register: u8 },
     Goto { register: u8 },
     Moveto { register: u8 },
-    Read { name: Option<&'a str> },
+    Read { workspace: Option<Workspace<'a>> },
     Flush,
 }
