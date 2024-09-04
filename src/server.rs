@@ -159,8 +159,8 @@ impl Server {
             }
             Request::Read { workspace } => match workspace {
                 Some(Workspace::Workspace(name)) => {
-                    let guard = self.inner.read().await;
-                    let (name, settings) = guard
+                    let lock = self.inner.read().await;
+                    let (name, settings) = lock
                         .workspaces
                         .get_key_value(name)
                         .ok_or_else(|| anyhow!("{name} doesn't point to any valid workspace"))?;
@@ -168,21 +168,20 @@ impl Server {
                     stream.write_msg(&ReadResponse {
                         workspaces: IterMap::new([(name, settings)]),
                         registers: IterMap::new(
-                            guard
-                                .registers
+                            lock.registers
                                 .iter()
                                 .filter(|(_, register_pointee)| *register_pointee == name),
                         ),
                     })?;
                 }
                 Some(Workspace::Register(register)) => {
-                    let guard = self.inner.read().await;
-                    let name = guard
+                    let lock = self.inner.read().await;
+                    let name = lock
                         .registers
                         .get(&register)
                         .ok_or_else(|| anyhow!("{register} does not point to any workspace"))?;
 
-                    let settings = guard
+                    let settings = lock
                         .workspaces
                         .get(name)
                         .ok_or_else(|| anyhow!("{name} doesn't point to any valid workspace"))?;
@@ -193,10 +192,10 @@ impl Server {
                     })?;
                 }
                 None => {
-                    let guard = self.inner.read().await;
+                    let lock = self.inner.read().await;
                     stream.write_msg(&ReadResponse {
-                        workspaces: IterMap::new(&guard.workspaces),
-                        registers: IterMap::new(&guard.registers),
+                        workspaces: &lock.workspaces,
+                        registers: &lock.registers,
                     })?;
                 }
             },
