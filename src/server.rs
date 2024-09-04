@@ -125,11 +125,15 @@ impl Server {
             }
             Request::Bind { name, register } => {
                 let mut lock = self.inner.write().await;
-                let name = lock
-                    .workspaces
-                    .get_key_value(name)
-                    .map(|(key, _)| key.clone())
-                    .unwrap_or_else(|| Arc::from(name));
+                let name = match lock.workspaces.get_key_value(name) {
+                    Some((name, _)) => Arc::clone(name),
+                    None => {
+                        let name = Arc::from(name);
+                        lock.workspaces
+                            .insert(Arc::clone(&name), WorkspaceSettings::default());
+                        name
+                    }
+                };
 
                 lock.registers.insert(register, name);
             }
