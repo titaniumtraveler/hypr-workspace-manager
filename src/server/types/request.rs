@@ -13,5 +13,6 @@ pub enum Request<'a> {
     Goto { register: u8 },
     Moveto { register: u8 },
     Read { workspace: Option<Workspace<'a>> },
+    Update,
     Flush,
 }

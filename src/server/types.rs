@@ -8,5 +8,6 @@ pub mod util {
 }
 
 mod iter_map;
+mod key_value_entry;
 mod read_response;
 mod request;

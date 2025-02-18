@@ -1,10 +1,18 @@
+use crate::server::State;
 use anyhow::Result;
+use passfd::FdPassingExt;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Write},
+    future::Future,
+    io::{self, ErrorKind},
+    os::fd::{AsRawFd, FromRawFd},
     path::Path,
+    pin::{pin, Pin},
     str::from_utf8,
+    task::{Context, Poll},
 };
+use tokio::io::Interest;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream},
     net::UnixStream,
@@ -25,7 +33,7 @@ impl Socket {
         }
     }
 
-    pub async fn connect(path: &Path) -> Result<Self> {
+    pub async fn connect(path: &Path) -> io::Result<Self> {
         let socket = UnixStream::connect(path).await?;
         Ok(Self::from_unixstream(socket))
     }
@@ -35,6 +43,10 @@ impl Socket {
         self.inner.read_until(b'\n', &mut self.read_buf).await?;
 
         Ok(!self.read_buf.is_empty())
+    }
+
+    pub fn recv_fd_or_state(&mut self) -> RecvFdOrState<'_> {
+        RecvFdOrState { socket: self }
     }
 
     pub fn msg(&self) -> Result<&str> {
@@ -68,6 +80,67 @@ impl Socket {
         Serialize::serialize(msg, &mut se)?;
         self.write_buf.push(b'\n');
         Ok(())
+    }
+}
+
+pub struct RecvFdOrState<'a> {
+    socket: &'a mut Socket,
+}
+
+pub enum FdOrState {
+    Socket(Socket),
+    State((usize, State)),
+}
+
+impl Future for RecvFdOrState<'_> {
+    type Output = Result<FdOrState>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let Socket {
+            inner: ref mut sock,
+            read_buf: ref mut buf,
+            ..
+        } = self.socket;
+
+        match (pin!(sock.read_until(b'\n', buf))).poll(cx)? {
+            Poll::Ready(_) => {
+                return Poll::Ready(Ok(FdOrState::State(self.socket.read_msg()?)));
+            }
+            Poll::Pending => {}
+        }
+
+        match pin!(recv_fd(sock.get_ref())).poll(cx)? {
+            Poll::Ready(fd) => {
+                return Poll::Ready(Ok(FdOrState::Socket(Socket::from_unixstream(fd))))
+            }
+            Poll::Pending => {}
+        }
+
+        Poll::Pending
+    }
+}
+
+/// # Cancel Safety
+///
+/// As the future returned from [`UnixStream::readable()`] is cancel safe, so is this.
+/// (The only future being `.await`ed)
+async fn recv_fd(socket: &UnixStream) -> io::Result<UnixStream> {
+    loop {
+        socket.readable().await?;
+
+        match socket.try_io(Interest::READABLE, || socket.as_raw_fd().recv_fd()) {
+            Err(err) if err.kind() == ErrorKind::WouldBlock => continue,
+            Ok(fd) => {
+                // SAFETY: This assumes that only valid `UnixStream`s are sent over the
+                // socket. This should be the case as long as nothing else than this server
+                // is sending FDs over the socket.
+                break unsafe {
+                    UnixStream::from_std(std::os::unix::net::UnixStream::from_raw_fd(fd))
+                };
+            }
+
+            Err(err) => break Err(err),
+        }
     }
 }
 

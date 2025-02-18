@@ -9,14 +9,19 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
     fmt::Write,
-    io::ErrorKind,
+    future::Future,
+    io::{self, ErrorKind},
     path::Path,
+    pin::Pin,
     sync::Arc,
+    task::{Context, Poll},
 };
 use tokio::{
     fs::remove_file,
-    net::{unix::SocketAddr, UnixListener},
-    sync::RwLock,
+    io::{AsyncBufReadExt, Interest},
+    net::{UnixListener, UnixSocket, UnixStream},
+    select,
+    sync::{mpsc, Notify, RwLock},
 };
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
 use types::{util::IterMap, ReadResponse, Workspace};
@@ -30,6 +35,12 @@ pub struct Server {
 
 #[derive(Debug, Default)]
 struct Inner {
+    state: State,
+    receiver: Option<mpsc::Receiver<Socket>>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct State {
     workspaces: HashMap<Arc<str>, WorkspaceSettings>,
     registers: BTreeMap<u8, Arc<str>>,
 }
@@ -37,27 +48,64 @@ struct Inner {
 impl Server {
     pub const SOCKET: &'static str = "ws-mgr.sock";
 
-    #[instrument(name = "socket server", skip(self), err)]
-    pub async fn run(self: Arc<Self>) -> Result<()> {
+    pub async fn setup_socket(path: &Path) -> Result<(Self, mpsc::Sender<Socket>, UnixListener)> {
+        fn listener(path: &Path) -> io::Result<UnixListener> {
+            let socket = UnixSocket::new_stream()?;
+
+            socket2::SockRef::from(&socket).set_reuse_port(true)?;
+
+            socket.bind(path)?;
+            socket.listen(256)
+        }
+
+        let mut socket = match Socket::connect(path).await {
+            Err(err) if err.kind() == ErrorKind::ConnectionRefused => {
+                let (sender, receiver) = mpsc::channel(256);
+                remove_file(path).await?;
+                let listener = listener(path)?;
+                let state = Server {
+                    inner: RwLock::new(Inner {
+                        state: Default::default(),
+                        receiver: Some(receiver),
+                    }),
+                };
+                return Ok((state, sender, listener));
+            }
+            r => r,
+        }?;
+        let listener = listener(path)?;
+
+        socket.write_msg(&Request::Update)?;
+        socket.flush().await?;
+
+        let mut fd_count = 0;
+        loop {
+            todo!()
+        }
+
+        todo!("{fd_count}")
+    }
+
+    pub async fn recover_old_client(self: Arc<Self>, notify: Notify, mut stream: Socket) {}
+
+    #[instrument(name = "socket server", err)]
+    pub async fn run() -> Result<()> {
         let mut hypr_dir = PathBuilder::hypr_basepath()?;
 
         let hypr_path: Arc<Path> = hypr_dir.with_filename(".socket.sock").into();
-        let socket = hypr_dir.with_filename(Self::SOCKET);
-        if let Err(err) = remove_file(socket).await {
-            if err.kind() != ErrorKind::NotFound {
-                return Err(err.into());
-            }
-        }
-        let socket = UnixListener::bind(socket)?;
+        let (state, sender, socket) =
+            Self::setup_socket(hypr_dir.with_filename(Self::SOCKET)).await?;
+        let state = Arc::new(state);
 
-        while let Ok((stream, socket)) = socket.accept().await {
+        while let Ok((stream, _)) = socket.accept().await {
             tokio::spawn({
-                let server_state = Arc::clone(&self);
+                let state = Arc::clone(&state);
+                let sender = sender.clone();
                 let hypr_path = Arc::clone(&hypr_path);
 
                 async {
-                    let res = server_state
-                        .handle_client(Socket::from_unixstream(stream), socket, hypr_path)
+                    let res = state
+                        .handle_client(Socket::from_unixstream(stream), sender, hypr_path)
                         .await;
                     if let Err(err) = res {
                         error!(?err, "client failed with {err}");
@@ -70,10 +118,14 @@ impl Server {
         Ok(())
     }
 
+    pub async fn try_upgrading_server(&self) -> Result<()> {
+        Ok(())
+    }
+
     pub async fn handle_client(
         self: Arc<Self>,
         mut stream: Socket,
-        _: SocketAddr,
+        sender: mpsc::Sender<Socket>,
         hypr_path: Arc<Path>,
     ) -> Result<()> {
         info!("connected");
@@ -118,32 +170,33 @@ impl Server {
         match request {
             Request::Create { name } => {
                 let mut lock = self.inner.write().await;
-                match lock.workspaces.entry(name.into()) {
+                match lock.state.workspaces.entry(name.into()) {
                     Entry::Vacant(vacant) => vacant.insert(WorkspaceSettings::default()),
                     Entry::Occupied(_) => return Err(anyhow!("name already in use")),
                 };
             }
             Request::Bind { name, register } => {
                 let mut lock = self.inner.write().await;
-                let name = match lock.workspaces.get_key_value(name) {
+                let name = match lock.state.workspaces.get_key_value(name) {
                     Some((name, _)) => Arc::clone(name),
                     None => {
                         let name = Arc::from(name);
-                        lock.workspaces
+                        lock.state
+                            .workspaces
                             .insert(Arc::clone(&name), WorkspaceSettings::default());
                         name
                     }
                 };
 
-                lock.registers.insert(register, name);
+                lock.state.registers.insert(register, name);
             }
             Request::Unbind { register } => {
                 let mut lock = self.inner.write().await;
-                lock.registers.remove(&register);
+                lock.state.registers.remove(&register);
             }
             Request::Goto { register } => {
                 let lock = self.inner.read().await;
-                let name = lock.registers.get(&register).ok_or_else(|| {
+                let name = lock.state.registers.get(&register).ok_or_else(|| {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
@@ -151,54 +204,57 @@ impl Server {
             }
             Request::Moveto { register } => {
                 let lock = self.inner.read().await;
-                let name = lock.registers.get(&register).ok_or_else(|| {
+                let name = lock.state.registers.get(&register).ok_or_else(|| {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
                 hypr.move_to(HyprWorkspace::Name(name));
             }
-            Request::Read { workspace } => match workspace {
-                Some(Workspace::Workspace(name)) => {
-                    let lock = self.inner.read().await;
-                    let (name, settings) = lock
-                        .workspaces
-                        .get_key_value(name)
-                        .ok_or_else(|| anyhow!("{name} doesn't point to any valid workspace"))?;
+            Request::Read { workspace } => {
+                match workspace {
+                    Some(Workspace::Workspace(name)) => {
+                        let lock = self.inner.read().await;
+                        let (name, settings) =
+                            lock.state.workspaces.get_key_value(name).ok_or_else(|| {
+                                anyhow!("{name} doesn't point to any valid workspace")
+                            })?;
 
-                    stream.write_msg(&ReadResponse {
-                        workspaces: IterMap::new([(name, settings)]),
-                        registers: IterMap::new(
-                            lock.registers
-                                .iter()
-                                .filter(|(_, register_pointee)| *register_pointee == name),
-                        ),
-                    })?;
-                }
-                Some(Workspace::Register(register)) => {
-                    let lock = self.inner.read().await;
-                    let name = lock
-                        .registers
-                        .get(&register)
-                        .ok_or_else(|| anyhow!("{register} does not point to any workspace"))?;
+                        stream.write_msg(&ReadResponse {
+                            workspaces: IterMap::new([(name, settings)]),
+                            registers: IterMap::new(
+                                lock.state
+                                    .registers
+                                    .iter()
+                                    .filter(|(_, register_pointee)| *register_pointee == name),
+                            ),
+                        })?;
+                    }
+                    Some(Workspace::Register(register)) => {
+                        let lock = self.inner.read().await;
+                        let name =
+                            lock.state.registers.get(&register).ok_or_else(|| {
+                                anyhow!("{register} does not point to any workspace")
+                            })?;
 
-                    let settings = lock
-                        .workspaces
-                        .get(name)
-                        .ok_or_else(|| anyhow!("{name} doesn't point to any valid workspace"))?;
+                        let settings = lock.state.workspaces.get(name).ok_or_else(|| {
+                            anyhow!("{name} doesn't point to any valid workspace")
+                        })?;
 
-                    stream.write_msg(&ReadResponse {
-                        workspaces: IterMap::new([(name, settings)]),
-                        registers: IterMap::new([(register, name)]),
-                    })?;
+                        stream.write_msg(&ReadResponse {
+                            workspaces: IterMap::new([(name, settings)]),
+                            registers: IterMap::new([(register, name)]),
+                        })?;
+                    }
+                    None => {
+                        let lock = self.inner.read().await;
+                        stream.write_msg(&ReadResponse {
+                            workspaces: &lock.state.workspaces,
+                            registers: &lock.state.registers,
+                        })?;
+                    }
                 }
-                None => {
-                    let lock = self.inner.read().await;
-                    stream.write_msg(&ReadResponse {
-                        workspaces: &lock.workspaces,
-                        registers: &lock.registers,
-                    })?;
-                }
-            },
+            }
+            Request::Update => todo!(),
             Request::Flush => {
                 hypr.flush(Some(&mut stream.write_buf)).await?;
                 stream.flush().await?;
@@ -206,6 +262,20 @@ impl Server {
         }
 
         Ok(())
+    }
+}
+
+struct WithCx<F>(F);
+
+impl<F, O> Future for WithCx<F>
+where
+    F: FnMut(&mut Context) -> Poll<O>,
+    F: Unpin,
+{
+    type Output = O;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0(cx)
     }
 }
 

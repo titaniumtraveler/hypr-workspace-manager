@@ -56,7 +56,7 @@ impl FromStr for Workspace {
 impl Cli {
     pub async fn run(self) -> Result<()> {
         match self.operation {
-            Operation::Server => Arc::new(Server::default()).run().await,
+            Operation::Server => Server::run().await,
             Operation::Create { name } => write_to_socket(Request::Create { name: &name }).await,
             Operation::Bind { name, register } => {
                 write_to_socket(Request::Bind {
