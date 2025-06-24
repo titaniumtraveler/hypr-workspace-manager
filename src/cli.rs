@@ -23,8 +23,10 @@ enum Operation {
     Create { name: String },
     Bind { name: String, register: u8 },
     Unbind { register: u8 },
-    Goto { register: u8 },
-    Moveto { register: u8 },
+    GotoRegister { register: u8 },
+    MovetoRegister { register: u8 },
+    GotoName { name: String },
+    MovetoName { name: String },
     Read { workspace: Option<Workspace> },
     Completions { shell: Shell },
 }
@@ -67,8 +69,16 @@ impl Cli {
                 .await
             }
             Operation::Unbind { register } => write_to_socket(Request::Unbind { register }).await,
-            Operation::Goto { register } => write_to_socket(Request::Goto { register }).await,
-            Operation::Moveto { register } => write_to_socket(Request::Moveto { register }).await,
+            Operation::GotoRegister { register } => {
+                write_to_socket(Request::GotoRegister { register }).await
+            }
+            Operation::MovetoRegister { register } => {
+                write_to_socket(Request::MovetoRegister { register }).await
+            }
+            Operation::GotoName { ref name } => write_to_socket(Request::GotoName { name }).await,
+            Operation::MovetoName { ref name } => {
+                write_to_socket(Request::MovetoName { name }).await
+            }
             Operation::Read { workspace } => {
                 write_to_socket(Request::Read {
                     workspace: workspace.as_ref().map(Workspace::as_workspace_ref),

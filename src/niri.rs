@@ -1,5 +1,5 @@
-use anyhow::Context;
-use niri_ipc::{Request, Response};
+use anyhow::{anyhow, Context};
+use niri_ipc::{Action, Reply, Request, Response, WorkspaceReferenceArg as WorkspaceRef};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
@@ -33,6 +33,72 @@ impl Niri {
         self.buffer.clear();
         self.socket.read_until(b'\n', &mut self.buffer).await?;
 
-        serde_json::from_slice(&self.buffer).map_err(Into::into)
+        serde_json::from_slice::<Reply>(&self.buffer)?.map_err(|err| anyhow!("niri-ipc err {err}"))
+    }
+
+    pub async fn goto(&mut self, name: &str) -> anyhow::Result<()> {
+        let Response::Workspaces(workspaces) = self.request(&Request::Workspaces).await? else {
+            return Err(anyhow!("expect Response::Workspaces"));
+        };
+
+        let workspace_exists = workspaces
+            .iter()
+            .filter_map(|workspace| workspace.name.as_deref())
+            .any(|workspace_name| workspace_name == name);
+
+        if !workspace_exists {
+            self.request(&Request::Action(Action::SetWorkspaceName {
+                name: name.to_owned(),
+                workspace: Some(WorkspaceRef::Index(
+                    workspaces
+                        .iter()
+                        .map(|workspace| workspace.idx)
+                        .max()
+                        .unwrap_or(1),
+                )),
+            }))
+            .await?;
+        }
+
+        self.request(&Request::Action(Action::FocusWorkspace {
+            reference: WorkspaceRef::Name(name.to_owned()),
+        }))
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn moveto(&mut self, name: &str) -> anyhow::Result<()> {
+        let Response::Workspaces(workspaces) = self.request(&Request::Workspaces).await? else {
+            return Err(anyhow!("expect Response::Workspaces"));
+        };
+
+        let workspace_exists = workspaces
+            .iter()
+            .filter_map(|workspace| workspace.name.as_deref())
+            .any(|workspace_name| workspace_name == name);
+
+        if !workspace_exists {
+            self.request(&Request::Action(Action::SetWorkspaceName {
+                name: name.to_owned(),
+                workspace: Some(WorkspaceRef::Index(
+                    workspaces
+                        .iter()
+                        .map(|workspace| workspace.idx)
+                        .max()
+                        .unwrap_or(1),
+                )),
+            }))
+            .await?;
+        }
+
+        self.request(&Request::Action(Action::MoveWindowToWorkspace {
+            window_id: None,
+            reference: WorkspaceRef::Name(name.to_owned()),
+            focus: true,
+        }))
+        .await?;
+
+        Ok(())
     }
 }

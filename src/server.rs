@@ -1,8 +1,5 @@
 use crate::{niri::Niri, server::types::Request, socket::Socket};
 use anyhow::{anyhow, Result};
-use niri_ipc::{
-    Action::FocusWorkspace, Request as NiriRequest, WorkspaceReferenceArg as WorkspaceRef,
-};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::{
@@ -129,32 +126,24 @@ impl Server {
                 let mut lock = self.inner.write().await;
                 lock.registers.remove(&register);
             }
-            Request::Goto { register } => {
+            Request::GotoRegister { register } => {
                 let lock = self.inner.read().await;
                 let name = lock.registers.get(&register).ok_or_else(|| {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
-                niri.request(&NiriRequest::Action(FocusWorkspace {
-                    reference: WorkspaceRef::Name(name.as_ref().to_owned()),
-                }))
-                .await?;
+                niri.goto(name).await?;
             }
-            Request::Moveto { register } => {
+            Request::MovetoRegister { register } => {
                 let lock = self.inner.read().await;
                 let name = lock.registers.get(&register).ok_or_else(|| {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
-                niri.request(&NiriRequest::Action(
-                    niri_ipc::Action::MoveWindowToWorkspace {
-                        window_id: None,
-                        reference: WorkspaceRef::Name(name.as_ref().to_owned()),
-                        focus: false,
-                    },
-                ))
-                .await?;
+                niri.moveto(name).await?;
             }
+            Request::GotoName { name } => niri.goto(name).await?,
+            Request::MovetoName { name } => niri.moveto(name).await?,
             Request::Read { workspace } => match workspace {
                 Some(Workspace::Workspace(name)) => {
                     let guard = self.inner.read().await;
