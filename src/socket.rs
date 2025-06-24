@@ -2,13 +2,15 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
     str::from_utf8,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream},
     net::UnixStream,
 };
+
+use crate::{path_builder::PathBuilder, server::Server};
 
 pub struct Socket {
     pub inner: BufStream<UnixStream>,
@@ -76,4 +78,8 @@ impl Write for Socket {
         self.write_buf.extend_from_slice(s.as_bytes());
         Ok(())
     }
+}
+
+pub fn socket_path() -> Result<PathBuf> {
+    PathBuilder::niri_basepath(Server::SOCKET)
 }

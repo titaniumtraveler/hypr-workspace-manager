@@ -1,5 +1,4 @@
 use crate::{
-    path_builder::PathBuilder,
     server::{
         types::{Request, Workspace as WorkspaceRef},
         Server,
@@ -7,7 +6,8 @@ use crate::{
     socket::Socket,
 };
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use std::{convert::Infallible, fmt::Debug, str::FromStr, sync::Arc};
 use tokio::io::{self, AsyncWriteExt};
 
@@ -26,6 +26,7 @@ enum Operation {
     Goto { register: u8 },
     Moveto { register: u8 },
     Read { workspace: Option<Workspace> },
+    Completions { shell: Shell },
 }
 
 #[derive(Debug, Clone)]
@@ -74,13 +75,22 @@ impl Cli {
                 })
                 .await
             }
+            Operation::Completions { shell } => {
+                clap_complete::generate(
+                    shell,
+                    &mut Cli::command(),
+                    option_env!("CARGO_BIN_NAME").unwrap_or(env!("CARGO_PKG_NAME")),
+                    &mut std::io::stdout(),
+                );
+                Ok(())
+            }
         }
     }
 }
 
 async fn write_to_socket(request: Request<'_>) -> Result<()> {
-    let mut hypr_dir = PathBuilder::hypr_basepath()?;
-    let mut socket = Socket::connect(hypr_dir.with_filename(Server::SOCKET)).await?;
+    let path = crate::socket::socket_path()?;
+    let mut socket = Socket::connect(&path).await?;
 
     socket.write_msg(&request)?;
     socket.write_msg(&Request::Flush)?;

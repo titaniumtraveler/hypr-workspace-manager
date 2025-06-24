@@ -28,23 +28,21 @@ impl PathBuilder {
 }
 
 impl PathBuilder {
-    pub fn hypr_basepath() -> Result<Self> {
-        let instance = match std::env::var("HYPRLAND_INSTANCE_SIGNATURE") {
-            Ok(instance) => instance,
+    pub fn niri_basepath(name: impl Display) -> Result<PathBuf> {
+        let socket_path = match std::env::var(niri_ipc::socket::SOCKET_PATH_ENV) {
+            Ok(path) => path,
             Err(VarError::NotPresent) => {
                 return Err(anyhow!(
-                    "expected to be started in the context of a running hyprland instance",
+                    "expected to be started in the context of a running niri instance",
                 ));
             }
             Err(VarError::NotUnicode(var)) => {
                 return Err(anyhow!(
-                    "invalid hyprland instance signature {var:?}, expected it to be unicode"
+                    "invalid niri socket path {var:?}, expected it to be unicode"
                 ));
             }
         };
 
-        Ok(PathBuilder::from_basepath(format_args!(
-            "/run/user/1000/hypr/{instance}"
-        )))
+        Ok(format!("{socket_path}-{name}.sock").into())
     }
 }

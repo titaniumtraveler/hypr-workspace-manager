@@ -1,16 +1,13 @@
-use crate::{
-    hypr::{Hypr, Workspace as HyprWorkspace},
-    path_builder::PathBuilder,
-    server::types::Request,
-    socket::Socket,
-};
+use crate::{niri::Niri, server::types::Request, socket::Socket};
 use anyhow::{anyhow, Result};
+use niri_ipc::{
+    Action::FocusWorkspace, Request as NiriRequest, WorkspaceReferenceArg as WorkspaceRef,
+};
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
-    fmt::Write,
     io::ErrorKind,
-    path::Path,
     sync::Arc,
 };
 use tokio::{
@@ -39,25 +36,22 @@ impl Server {
 
     #[instrument(name = "socket server", skip(self), err)]
     pub async fn run(self: Arc<Self>) -> Result<()> {
-        let mut hypr_dir = PathBuilder::hypr_basepath()?;
+        let socket = crate::socket::socket_path()?;
 
-        let hypr_path: Arc<Path> = hypr_dir.with_filename(".socket.sock").into();
-        let socket = hypr_dir.with_filename(Self::SOCKET);
-        if let Err(err) = remove_file(socket).await {
+        if let Err(err) = remove_file(&socket).await {
             if err.kind() != ErrorKind::NotFound {
                 return Err(err.into());
             }
         }
-        let socket = UnixListener::bind(socket)?;
+        let socket = UnixListener::bind(&socket)?;
 
         while let Ok((stream, socket)) = socket.accept().await {
             tokio::spawn({
                 let server_state = Arc::clone(&self);
-                let hypr_path = Arc::clone(&hypr_path);
 
                 async {
                     let res = server_state
-                        .handle_client(Socket::from_unixstream(stream), socket, hypr_path)
+                        .handle_client(Socket::from_unixstream(stream), socket)
                         .await;
                     if let Err(err) = res {
                         error!(?err, "client failed with {err}");
@@ -70,15 +64,10 @@ impl Server {
         Ok(())
     }
 
-    pub async fn handle_client(
-        self: Arc<Self>,
-        mut stream: Socket,
-        _: SocketAddr,
-        hypr_path: Arc<Path>,
-    ) -> Result<()> {
+    pub async fn handle_client(self: Arc<Self>, mut stream: Socket, _: SocketAddr) -> Result<()> {
         info!("connected");
 
-        let mut hypr = Hypr::new(&hypr_path);
+        let mut niri = Niri::from_env().await?;
 
         loop {
             let res = async {
@@ -87,7 +76,7 @@ impl Server {
                     return Ok(false);
                 }
 
-                if let Err(err) = self.handle_message(&mut stream, &mut hypr).await {
+                if let Err(err) = self.handle_message(&mut stream, &mut niri).await {
                     warn!(?err, "error processing message");
 
                     write!(stream, "{}", err)?;
@@ -104,7 +93,6 @@ impl Server {
             }
         }
 
-        hypr.flush(Some(&mut stream.write_buf)).await?;
         stream.flush().await?;
 
         info!("disconnected");
@@ -112,7 +100,7 @@ impl Server {
         Ok(())
     }
 
-    pub async fn handle_message<'a>(&self, stream: &'a mut Socket, hypr: &mut Hypr) -> Result<()> {
+    pub async fn handle_message(&self, stream: &mut Socket, niri: &mut Niri) -> Result<()> {
         let request: Request = stream.read_msg()?;
         debug!(?request, "input");
         match request {
@@ -147,7 +135,10 @@ impl Server {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
-                hypr.go_to(HyprWorkspace::Name(name));
+                niri.request(&NiriRequest::Action(FocusWorkspace {
+                    reference: WorkspaceRef::Name(name.as_ref().to_owned()),
+                }))
+                .await?;
             }
             Request::Moveto { register } => {
                 let lock = self.inner.read().await;
@@ -155,7 +146,14 @@ impl Server {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
-                hypr.move_to(HyprWorkspace::Name(name));
+                niri.request(&NiriRequest::Action(
+                    niri_ipc::Action::MoveWindowToWorkspace {
+                        window_id: None,
+                        reference: WorkspaceRef::Name(name.as_ref().to_owned()),
+                        focus: false,
+                    },
+                ))
+                .await?;
             }
             Request::Read { workspace } => match workspace {
                 Some(Workspace::Workspace(name)) => {
@@ -201,7 +199,6 @@ impl Server {
                 }
             },
             Request::Flush => {
-                hypr.flush(Some(&mut stream.write_buf)).await?;
                 stream.flush().await?;
             }
         }

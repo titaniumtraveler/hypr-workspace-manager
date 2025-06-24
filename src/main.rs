@@ -1,5 +1,5 @@
 use clap::Parser;
-use hypr_workspace_manager::cli::Cli;
+use niri_workspace_manager::cli::Cli;
 
 #[allow(dead_code)]
 fn tracing_flat() {
