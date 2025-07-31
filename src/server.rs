@@ -1,10 +1,11 @@
 use crate::{niri::Niri, server::types::Request, socket::Socket};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use std::fmt::Write;
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
+    fmt::Write,
     io::ErrorKind,
+    ops::DerefMut,
     sync::Arc,
 };
 use tokio::{
@@ -19,13 +20,13 @@ pub mod types;
 
 #[derive(Debug, Default)]
 pub struct Server {
-    inner: RwLock<Inner>,
+    state: RwLock<State>,
 }
 
-#[derive(Debug, Default)]
-struct Inner {
-    workspaces: HashMap<Arc<str>, WorkspaceSettings>,
-    registers: BTreeMap<u8, Arc<str>>,
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct State {
+    pub workspaces: HashMap<Arc<str>, WorkspaceSettings>,
+    pub registers: BTreeMap<Arc<str>, Arc<str>>,
 }
 
 impl Server {
@@ -76,7 +77,7 @@ impl Server {
                 if let Err(err) = self.handle_message(&mut stream, &mut niri).await {
                     warn!(?err, "error processing message");
 
-                    write!(stream, "{}", err)?;
+                    write!(stream, "{err}")?;
                     stream.flush().await?;
                 }
 
@@ -98,18 +99,18 @@ impl Server {
     }
 
     pub async fn handle_message(&self, stream: &mut Socket, niri: &mut Niri) -> Result<()> {
-        let request: Request = stream.read_msg()?;
+        let (request, mut resp): (Request, _) = stream.read_msg()?;
         debug!(?request, "input");
         match request {
             Request::Create { name } => {
-                let mut lock = self.inner.write().await;
+                let mut lock = self.state.write().await;
                 match lock.workspaces.entry(name.into()) {
                     Entry::Vacant(vacant) => vacant.insert(WorkspaceSettings::default()),
                     Entry::Occupied(_) => return Err(anyhow!("name already in use")),
                 };
             }
             Request::Bind { name, register } => {
-                let mut lock = self.inner.write().await;
+                let mut lock = self.state.write().await;
                 let name = match lock.workspaces.get_key_value(name) {
                     Some((name, _)) => Arc::clone(name),
                     None => {
@@ -120,23 +121,23 @@ impl Server {
                     }
                 };
 
-                lock.registers.insert(register, name);
+                lock.registers.insert(register.into(), name);
             }
             Request::Unbind { register } => {
-                let mut lock = self.inner.write().await;
-                lock.registers.remove(&register);
+                let mut lock = self.state.write().await;
+                lock.registers.remove(register);
             }
             Request::GotoRegister { register } => {
-                let lock = self.inner.read().await;
-                let name = lock.registers.get(&register).ok_or_else(|| {
+                let lock = self.state.read().await;
+                let name = lock.registers.get(register).ok_or_else(|| {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
                 niri.goto(name).await?;
             }
             Request::MovetoRegister { register } => {
-                let lock = self.inner.read().await;
-                let name = lock.registers.get(&register).ok_or_else(|| {
+                let lock = self.state.read().await;
+                let name = lock.registers.get(register).ok_or_else(|| {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
@@ -146,7 +147,7 @@ impl Server {
             Request::MovetoName { name } => niri.moveto(name).await?,
             Request::Read { workspace } => match workspace {
                 Some(Workspace::Workspace(name)) => {
-                    let guard = self.inner.read().await;
+                    let guard = self.state.read().await;
                     let (name, settings) = guard
                         .workspaces
                         .get_key_value(name)
@@ -163,10 +164,10 @@ impl Server {
                     })?;
                 }
                 Some(Workspace::Register(register)) => {
-                    let guard = self.inner.read().await;
+                    let guard = self.state.read().await;
                     let name = guard
                         .registers
-                        .get(&register)
+                        .get(register)
                         .ok_or_else(|| anyhow!("{register} does not point to any workspace"))?;
 
                     let settings = guard
@@ -174,19 +175,29 @@ impl Server {
                         .get(name)
                         .ok_or_else(|| anyhow!("{name} doesn't point to any valid workspace"))?;
 
-                    stream.write_msg(&ReadResponse {
+                    resp.write_msg(&ReadResponse {
                         workspaces: IterMap::new([(name, settings)]),
                         registers: IterMap::new([(register, name)]),
                     })?;
                 }
                 None => {
-                    let guard = self.inner.read().await;
+                    let guard = self.state.read().await;
                     stream.write_msg(&ReadResponse {
                         workspaces: IterMap::new(&guard.workspaces),
                         registers: IterMap::new(&guard.registers),
                     })?;
                 }
             },
+            Request::Write(state) => {
+                let mut guard = self.state.write().await;
+                let State {
+                    workspaces,
+                    registers,
+                } = guard.deref_mut();
+
+                workspaces.extend(state.workspaces);
+                registers.extend(state.registers);
+            }
             Request::Flush => {
                 stream.flush().await?;
             }
@@ -197,7 +208,7 @@ impl Server {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct WorkspaceSettings {}
+pub struct WorkspaceSettings {}
 
 #[allow(clippy::derivable_impls)]
 impl Default for WorkspaceSettings {

@@ -6,7 +6,7 @@ use std::{
 
 #[derive(Debug, Clone, Copy)]
 pub enum Workspace<'a> {
-    Register(u8),
+    Register(&'a str),
     Workspace(&'a str),
 }
 
@@ -16,7 +16,7 @@ impl Serialize for Workspace<'_> {
         S: serde::Serializer,
     {
         match self {
-            Workspace::Register(register) => serializer.serialize_u8(*register),
+            Workspace::Register(register) => serializer.serialize_str(register),
             Workspace::Workspace(workspace) => serializer.serialize_str(workspace),
         }
     }
@@ -38,13 +38,6 @@ impl<'de: 'a, 'a> Visitor<'de> for WorkspaceVisitor<'a> {
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("a u8 or borrowed str")
-    }
-
-    fn visit_u8<E>(self, v: u8) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(Workspace::Register(v))
     }
 
     fn visit_borrowed_str<E>(self, v: &'a str) -> Result<Self::Value, E>

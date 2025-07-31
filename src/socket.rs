@@ -9,6 +9,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream},
     net::UnixStream,
 };
+use tracing::{instrument, trace};
 
 use crate::{path_builder::PathBuilder, server::Server};
 
@@ -56,19 +57,39 @@ impl Socket {
     }
 }
 
+pub struct WriteMsg<'a> {
+    write_buf: &'a mut Vec<u8>,
+}
+
 impl Socket {
-    pub fn read_msg<'a, T: Deserialize<'a>>(&'a self) -> Result<T> {
+    pub fn read_msg<'a, T: Deserialize<'a>>(&'a mut self) -> Result<(T, WriteMsg<'a>)> {
         let mut de = serde_json::Deserializer::from_slice(&self.read_buf);
         let msg = Deserialize::deserialize(&mut de)?;
         de.end()?;
 
-        Ok(msg)
+        Ok((
+            msg,
+            WriteMsg {
+                write_buf: &mut self.write_buf,
+            },
+        ))
     }
 
+    pub fn write_msg<T: Serialize>(&mut self, msg: &T) -> Result<()> {
+        WriteMsg {
+            write_buf: &mut self.write_buf,
+        }
+        .write_msg(msg)
+    }
+}
+
+impl WriteMsg<'_> {
+    #[instrument(level = "trace", skip(self, msg))]
     pub fn write_msg<T: Serialize>(&mut self, msg: &T) -> Result<()> {
         let mut se = serde_json::Serializer::new(&mut self.write_buf);
         Serialize::serialize(msg, &mut se)?;
         self.write_buf.push(b'\n');
+        trace!(msg = ?std::str::from_utf8(self.write_buf), "msg");
         Ok(())
     }
 }

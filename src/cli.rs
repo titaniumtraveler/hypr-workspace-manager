@@ -1,7 +1,7 @@
 use crate::{
     server::{
         types::{Request, Workspace as WorkspaceRef},
-        Server,
+        Server, State,
     },
     socket::Socket,
 };
@@ -21,27 +21,28 @@ pub struct Cli {
 enum Operation {
     Server,
     Create { name: String },
-    Bind { name: String, register: u8 },
-    Unbind { register: u8 },
-    GotoRegister { register: u8 },
-    MovetoRegister { register: u8 },
+    Bind { name: String, register: String },
+    Unbind { register: String },
+    GotoRegister { register: String },
+    MovetoRegister { register: String },
     GotoName { name: String },
     MovetoName { name: String },
     Read { workspace: Option<Workspace> },
+    Write { state: String },
     Completions { shell: Shell },
 }
 
 #[derive(Debug, Clone)]
 enum Workspace {
     Workspace(String),
-    Register(u8),
+    Register(String),
 }
 
 impl Workspace {
     fn as_workspace_ref(&self) -> WorkspaceRef {
         match self {
             Workspace::Workspace(name) => WorkspaceRef::Workspace(name),
-            Workspace::Register(register) => WorkspaceRef::Register(*register),
+            Workspace::Register(register) => WorkspaceRef::Register(register),
         }
     }
 }
@@ -64,16 +65,27 @@ impl Cli {
             Operation::Bind { name, register } => {
                 write_to_socket(Request::Bind {
                     name: &name,
-                    register,
+                    register: &register,
                 })
                 .await
             }
-            Operation::Unbind { register } => write_to_socket(Request::Unbind { register }).await,
+            Operation::Unbind { register } => {
+                write_to_socket(Request::Unbind {
+                    register: &register,
+                })
+                .await
+            }
             Operation::GotoRegister { register } => {
-                write_to_socket(Request::GotoRegister { register }).await
+                write_to_socket(Request::GotoRegister {
+                    register: &register,
+                })
+                .await
             }
             Operation::MovetoRegister { register } => {
-                write_to_socket(Request::MovetoRegister { register }).await
+                write_to_socket(Request::MovetoRegister {
+                    register: &register,
+                })
+                .await
             }
             Operation::GotoName { ref name } => write_to_socket(Request::GotoName { name }).await,
             Operation::MovetoName { ref name } => {
@@ -93,6 +105,17 @@ impl Cli {
                     &mut std::io::stdout(),
                 );
                 Ok(())
+            }
+            Operation::Write { state } => {
+                let State {
+                    workspaces,
+                    registers,
+                } = serde_json::from_str(&state)?;
+                write_to_socket(Request::Write(State {
+                    workspaces,
+                    registers,
+                }))
+                .await
             }
         }
     }
