@@ -21,6 +21,7 @@ pub struct Cli {
 enum Operation {
     Server,
     Create { name: String },
+    Delete { name: String },
     Bind { name: String, register: String },
     Unbind { register: String },
     GotoRegister { register: String },
@@ -62,6 +63,7 @@ impl Cli {
         match self.operation {
             Operation::Server => Arc::new(Server::default()).run().await,
             Operation::Create { name } => write_to_socket(Request::Create { name: &name }).await,
+            Operation::Delete { name } => write_to_socket(Request::Delete { name: &name }).await,
             Operation::Bind { name, register } => {
                 write_to_socket(Request::Bind {
                     name: &name,

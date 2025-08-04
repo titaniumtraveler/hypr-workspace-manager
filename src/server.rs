@@ -109,6 +109,10 @@ impl Server {
                     Entry::Occupied(_) => return Err(anyhow!("name already in use")),
                 };
             }
+            Request::Delete { name } => {
+                let mut lock = self.state.write().await;
+                lock.workspaces.remove(name);
+            }
             Request::Bind { name, register } => {
                 let mut lock = self.state.write().await;
                 let name = match lock.workspaces.get_key_value(name) {
