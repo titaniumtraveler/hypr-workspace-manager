@@ -139,16 +139,16 @@ impl Server {
 
                 niri.goto(name).await?;
             }
-            Request::MovetoRegister { register } => {
+            Request::MovetoRegister { register, focus } => {
                 let lock = self.state.read().await;
                 let name = lock.registers.get(register).ok_or_else(|| {
                     anyhow!("register {register} does not point to any workspace")
                 })?;
 
-                niri.moveto(name).await?;
+                niri.moveto(name, focus).await?;
             }
             Request::GotoName { name } => niri.goto(name).await?,
-            Request::MovetoName { name } => niri.moveto(name).await?,
+            Request::MovetoName { name, focus } => niri.moveto(name, focus).await?,
             Request::Read { workspace } => match workspace {
                 Some(Workspace::Workspace(name)) => {
                     let guard = self.state.read().await;

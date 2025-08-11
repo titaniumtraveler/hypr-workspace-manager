@@ -20,17 +20,44 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 enum Operation {
     Server,
-    Create { name: String },
-    Delete { name: String },
-    Bind { name: String, register: String },
-    Unbind { register: String },
-    GotoRegister { register: String },
-    MovetoRegister { register: String },
-    GotoName { name: String },
-    MovetoName { name: String },
-    Read { workspace: Option<Workspace> },
-    Write { state: String },
-    Completions { shell: Shell },
+    Create {
+        name: String,
+    },
+    Delete {
+        name: String,
+    },
+    Bind {
+        name: String,
+        register: String,
+    },
+    Unbind {
+        register: String,
+    },
+    GotoRegister {
+        register: String,
+    },
+    MovetoRegister {
+        register: String,
+        #[arg(short, long)]
+        focus: bool,
+    },
+    GotoName {
+        name: String,
+    },
+    MovetoName {
+        name: String,
+        #[arg(short, long)]
+        focus: bool,
+    },
+    Read {
+        workspace: Option<Workspace>,
+    },
+    Write {
+        state: String,
+    },
+    Completions {
+        shell: Shell,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -40,7 +67,7 @@ enum Workspace {
 }
 
 impl Workspace {
-    fn as_workspace_ref(&self) -> WorkspaceRef {
+    fn as_workspace_ref(&self) -> WorkspaceRef<'_> {
         match self {
             Workspace::Workspace(name) => WorkspaceRef::Workspace(name),
             Workspace::Register(register) => WorkspaceRef::Register(register),
@@ -83,15 +110,16 @@ impl Cli {
                 })
                 .await
             }
-            Operation::MovetoRegister { register } => {
+            Operation::MovetoRegister { register, focus } => {
                 write_to_socket(Request::MovetoRegister {
                     register: &register,
+                    focus,
                 })
                 .await
             }
             Operation::GotoName { ref name } => write_to_socket(Request::GotoName { name }).await,
-            Operation::MovetoName { ref name } => {
-                write_to_socket(Request::MovetoName { name }).await
+            Operation::MovetoName { ref name, focus } => {
+                write_to_socket(Request::MovetoName { name, focus }).await
             }
             Operation::Read { workspace } => {
                 write_to_socket(Request::Read {

@@ -68,7 +68,7 @@ impl Niri {
         Ok(())
     }
 
-    pub async fn moveto(&mut self, name: &str) -> anyhow::Result<()> {
+    pub async fn moveto(&mut self, name: &str, focus: bool) -> anyhow::Result<()> {
         let Response::Workspaces(workspaces) = self.request(&Request::Workspaces).await? else {
             return Err(anyhow!("expect Response::Workspaces"));
         };
@@ -95,7 +95,7 @@ impl Niri {
         self.request(&Request::Action(Action::MoveWindowToWorkspace {
             window_id: None,
             reference: WorkspaceRef::Name(name.to_owned()),
-            focus: true,
+            focus,
         }))
         .await?;
 
