@@ -8,7 +8,7 @@ use crate::{
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
-use std::{convert::Infallible, fmt::Debug, str::FromStr, sync::Arc};
+use std::{convert::Infallible, fmt::Debug, io::BufReader, str::FromStr, sync::Arc};
 use tokio::io::{self, AsyncWriteExt};
 
 #[derive(Debug, Parser)]
@@ -52,9 +52,7 @@ enum Operation {
     Read {
         workspace: Option<Workspace>,
     },
-    Write {
-        state: String,
-    },
+    Write {},
     Completions {
         shell: Shell,
     },
@@ -127,6 +125,17 @@ impl Cli {
                 })
                 .await
             }
+            Operation::Write {} => {
+                let State {
+                    workspaces,
+                    registers,
+                } = serde_json::from_reader(BufReader::new(std::io::stdin()))?;
+                write_to_socket(Request::Write(State {
+                    workspaces,
+                    registers,
+                }))
+                .await
+            }
             Operation::Completions { shell } => {
                 clap_complete::generate(
                     shell,
@@ -135,17 +144,6 @@ impl Cli {
                     &mut std::io::stdout(),
                 );
                 Ok(())
-            }
-            Operation::Write { state } => {
-                let State {
-                    workspaces,
-                    registers,
-                } = serde_json::from_str(&state)?;
-                write_to_socket(Request::Write(State {
-                    workspaces,
-                    registers,
-                }))
-                .await
             }
         }
     }
