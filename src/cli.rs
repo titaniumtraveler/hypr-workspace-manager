@@ -5,10 +5,18 @@ use crate::{
     },
     socket::Socket,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::Shell;
-use std::{convert::Infallible, fmt::Debug, io::BufReader, str::FromStr, sync::Arc};
+use clap_complete::{Generator, Shell};
+use std::{
+    convert::Infallible,
+    ffi::OsStr,
+    fmt::Debug,
+    io::{BufReader, BufWriter, Write},
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+};
 use tokio::io::{self, AsyncWriteExt};
 
 #[derive(Debug, Parser)]
@@ -55,6 +63,8 @@ enum Operation {
     Write {},
     Completions {
         shell: Shell,
+        #[arg(long)]
+        save: bool,
     },
 }
 
@@ -136,13 +146,51 @@ impl Cli {
                 }))
                 .await
             }
-            Operation::Completions { shell } => {
-                clap_complete::generate(
-                    shell,
-                    &mut Cli::command(),
-                    option_env!("CARGO_BIN_NAME").unwrap_or(env!("CARGO_PKG_NAME")),
-                    &mut std::io::stdout(),
-                );
+            Operation::Completions { shell, save } => {
+                const BIN_NAME: &str = match option_env!("CARGO_BIN_NAME") {
+                    Some(name) => name,
+                    None => env!("CARGO_PKG_NAME"),
+                };
+
+                fn gen<G: Generator, W: Write>(shell: G, writer: W) {
+                    clap_complete::generate(
+                        shell,
+                        &mut Cli::command(),
+                        BIN_NAME,
+                        &mut BufWriter::new(writer),
+                    );
+                }
+
+                if save {
+                    let path = match shell {
+                        Shell::Bash => {
+                            let mut path = PathBuf::new();
+
+                            if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+                                path.extend([&data_home]);
+                            } else if let Some(home) = std::env::var_os("HOME") {
+                                path.extend([&home, OsStr::new(".local/share")]);
+                            }
+                            path.extend(["bash-completion/completions/", BIN_NAME]);
+
+                            path
+                        }
+                        shell => {
+                            return Err(anyhow!(
+                                "saving completions to file isn't yet supported by {shell}"
+                            ))
+                        }
+                    };
+
+                    println!(
+                        "writing completions for `{shell}` to `{path}`",
+                        path = path.display()
+                    );
+                    gen(shell, std::fs::File::create(path)?);
+                } else {
+                    gen(shell, std::io::stdout());
+                }
+
                 Ok(())
             }
         }
